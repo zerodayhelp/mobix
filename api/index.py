@@ -11,20 +11,16 @@ import logging
 
 app = Flask(__name__)
 
-# ✅ CORS configuration
+# ✅ CORS configuration for your frontend
 CORS(
     app,
-    resources={
-        r"/api/*": {
-            "origins": [
-                "https://zeroday.help",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5000",
-                "http://127.0.0.1:5000"
-            ]
-        }
-    },
+    resources={r"/api/*": {"origins": [
+        "https://zeroday.help",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000"
+    ]}},
     supports_credentials=True
 )
 
@@ -43,7 +39,6 @@ TYPE_MAP = {
     PhoneNumberType.UAN: "UAN",
     PhoneNumberType.UNKNOWN: "Unknown"
 }
-
 
 def get_number_info(number_str: str, region: str = None, language: str = "en") -> dict:
     try:
@@ -72,7 +67,6 @@ def get_number_info(number_str: str, region: str = None, language: str = "en") -
     except Exception as e:
         return {"error": "ProcessingError", "message": str(e)}
 
-
 @app.route("/")
 def index():
     return jsonify({
@@ -80,12 +74,10 @@ def index():
         "message": "Phone Parser API is running"
     })
 
-
 @app.route("/api/parse", methods=["POST"])
 def api_parse():
     try:
         data = request.get_json(silent=True) or {}
-
         number = data.get("number")
         if not number:
             return jsonify({
@@ -102,24 +94,16 @@ def api_parse():
         info = get_number_info(number, region, language)
 
         if "error" in info:
-            return jsonify({
-                "success": False,
-                "error": info
-            }), 400
+            return jsonify({"success": False, "error": info}), 400
 
-        return jsonify({
-            "success": True,
-            "data": info
-        }), 200
+        return jsonify({"success": True, "data": info}), 200
 
     except Exception as e:
         logging.error(f"Unexpected error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": "internal_error",
-            "message": "Internal server error"
-        }), 500
+        return jsonify({"success": False, "error": "internal_error", "message": "Internal server error"}), 500
 
-
-# Required for Vercel serverless
-app = app
+# ✅ Vercel serverless handler
+def handler(event, context):
+    from mangum import Mangum
+    asgi_handler = Mangum(app)
+    return asgi_handler(event, context)

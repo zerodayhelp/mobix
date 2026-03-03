@@ -9,15 +9,27 @@ import phonenumbers
 from phonenumbers import PhoneNumberType, PhoneNumberFormat
 from phonenumbers import carrier as carrier_mod, geocoder as geocoder_mod, timezone as timezone_mod
 import logging
+import requests
+import json
 
 app = Flask(__name__)
 
-# ✅ STRICT CORS CONFIG (Production)
+# ✅ ALLOW ALL CORS (Development/Proxy)
 CORS(
     app,
-    resources={r"/api/*": {"origins": "https://zeroday.help"}},
+    resources={r"/*": {"origins": "*"}},
     supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 )
+
+# Configure CORS headers manually for all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 logging.basicConfig(level=logging.INFO)
 
@@ -101,21 +113,23 @@ def index():
     )
 
 
-# ✅ IMPORTANT: allow OPTIONS for preflight
+# ✅ IMPORTANT: allow OPTIONS for preflight and proxy to external API
 @app.route("/api/parse", methods=["POST", "OPTIONS"])
 def api_parse():
+    external_api_url = "https://mobixv2-git-main-tekorixs-projects.vercel.app/api/parse"
 
     # Handle browser preflight request
     if request.method == "OPTIONS":
         response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "https://zeroday.help")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
         response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
         return response, 200
 
-    # Normal POST request
+    # Get request data
     data = request.get_json(silent=True) or request.form.to_dict() or {}
-
+    
+    # Validate required parameter
     number = data.get("number") or data.get("phone")
     if not number:
         return jsonify({
@@ -124,16 +138,66 @@ def api_parse():
             "message": "`number` is required."
         }), 400
 
-    region = data.get("region")
-    language = data.get("language", "en")
-
-    logging.info("Parsing number=%s region=%s", number, region)
-    info = get_number_info(number, region, language)
-
-    if "error" in info:
-        return jsonify({"success": False, "error": info}), 400
-
-    return jsonify({"success": True, "data": info}), 200
+    try:
+        # Forward request to external API
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.post(
+            external_api_url,
+            json=data,
+            headers=headers,
+            timeout=10
+        )
+        
+        # Check if external API returned a valid response
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                # Add CORS headers to the response
+                resp = jsonify(result)
+                resp.headers.add('Access-Control-Allow-Origin', '*')
+                resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
+                resp.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+                return resp, 200
+            except json.JSONDecodeError:
+                # If external API returns invalid JSON, return error
+                return jsonify({
+                    "success": False,
+                    "error": "external_api_error",
+                    "message": "External API returned invalid response"
+                }), 502
+        else:
+            # External API returned error status
+            return jsonify({
+                "success": False,
+                "error": "external_api_error",
+                "message": f"External API returned status {response.status_code}",
+                "details": response.text[:200] if response.text else "No details available"
+            }), response.status_code
+            
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "success": False,
+            "error": "timeout",
+            "message": "Request to external API timed out"
+        }), 504
+        
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "success": False,
+            "error": "connection_error",
+            "message": "Could not connect to external API"
+        }), 503
+        
+    except requests.exceptions.RequestException as e:
+        return jsonify({
+            "success": False,
+            "error": "request_error",
+            "message": f"Request failed: {str(e)}"
+        }), 500
 
 
 # Required for Vercel

@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 """
 Flask phone number parsing API using the `phonenumbers` library.
-
-Save as `flask_phonenumber_parser.py` and run with `python flask_phonenumber_parser.py`.
-
-Endpoints:
-  - POST /api/parse   -> accepts JSON or form data with keys: number (required), region (optional, e.g. "US"), language (optional, e.g. "en")
-  - GET  /           -> small welcome message
-
-Returns JSON with detailed parsed phone number info and validity checks.
 """
 
 from flask import Flask, request, jsonify
@@ -19,7 +11,14 @@ from phonenumbers import carrier as carrier_mod, geocoder as geocoder_mod, timez
 import logging
 
 app = Flask(__name__)
-CORS(app)
+
+# ✅ STRICT CORS CONFIG (Production)
+CORS(
+    app,
+    resources={r"/api/*": {"origins": "https://zeroday.help"}},
+    supports_credentials=True,
+)
+
 logging.basicConfig(level=logging.INFO)
 
 TYPE_MAP = {
@@ -38,49 +37,37 @@ TYPE_MAP = {
 
 
 def get_number_info(number_str: str, region: str | None = None, language: str = "en") -> dict:
-    """Parse a phone number string and return a structured info dict.
-
-    - number_str: the raw phone number string the user sent
-    - region: optional 2-letter region code (e.g. 'US', 'GB') used as parsing hint
-    - language: language code used for carrier/geocoder names
-    """
     try:
         if region:
             parsed = phonenumbers.parse(number_str, region.upper())
         else:
-            # Let the library attempt to infer region from the number itself
             parsed = phonenumbers.parse(number_str, None)
     except phonenumbers.NumberParseException as e:
         return {"error": "NumberParseException", "message": str(e)}
 
-    # Basic checks
     is_valid = phonenumbers.is_valid_number(parsed)
     is_possible = phonenumbers.is_possible_number(parsed)
-
     number_type = phonenumbers.number_type(parsed)
     type_str = TYPE_MAP.get(number_type, "Unknown")
 
-    # Formats
     international_format = phonenumbers.format_number(parsed, PhoneNumberFormat.INTERNATIONAL)
     national_format = phonenumbers.format_number(parsed, PhoneNumberFormat.NATIONAL)
     e164_format = phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
     rfc3966 = phonenumbers.format_number(parsed, PhoneNumberFormat.RFC3966)
 
-    # Region, country code
     region_code = phonenumbers.region_code_for_number(parsed)
     country_code = parsed.country_code
 
-    # Carrier and geocoding (human-friendly location)
     try:
         carrier_name = carrier_mod.name_for_number(parsed, language) or ""
     except Exception:
         carrier_name = ""
+
     try:
         geo_description = geocoder_mod.description_for_number(parsed, language) or ""
     except Exception:
         geo_description = ""
 
-    # Time zones
     try:
         tz = list(timezone_mod.time_zones_for_number(parsed))
     except Exception:
@@ -109,24 +96,35 @@ def get_number_info(number_str: str, region: str | None = None, language: str = 
 def index():
     return (
         "<h3>Phone number parsing API</h3>"
-        "<p>POST JSON to <code>/api/parse</code> with <code>{'number': '+441632960960'}</code></p>"
+        "<p>POST JSON to <code>/api/parse</code> with "
+        "<code>{'number': '+441632960960'}</code></p>"
     )
 
 
-@app.route("/api/parse", methods=["POST"])
+# ✅ IMPORTANT: allow OPTIONS for preflight
+@app.route("/api/parse", methods=["POST", "OPTIONS"])
 def api_parse():
-    # Accept JSON or form-encoded data
-    data = None
-    if request.is_json:
-        data = request.get_json()
-    else:
-        data = request.form.to_dict() or request.get_json(silent=True) or {}
+
+    # Handle browser preflight request
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "https://zeroday.help")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+        return response, 200
+
+    # Normal POST request
+    data = request.get_json(silent=True) or request.form.to_dict() or {}
 
     number = data.get("number") or data.get("phone")
     if not number:
-        return jsonify({"success": False, "error": "missing_parameter", "message": "`number` is required in JSON body or form data."}), 400
+        return jsonify({
+            "success": False,
+            "error": "missing_parameter",
+            "message": "`number` is required."
+        }), 400
 
-    region = data.get("region")  # optional parse hint, e.g. 'US'
+    region = data.get("region")
     language = data.get("language", "en")
 
     logging.info("Parsing number=%s region=%s", number, region)
@@ -138,5 +136,5 @@ def api_parse():
     return jsonify({"success": True, "data": info}), 200
 
 
-# This is required for Vercel
+# Required for Vercel
 app = app

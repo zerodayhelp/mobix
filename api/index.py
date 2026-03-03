@@ -8,21 +8,12 @@ from phonenumbers import carrier as carrier_mod
 from phonenumbers import geocoder as geocoder_mod
 from phonenumbers import timezone as timezone_mod
 import logging
+from mangum import Mangum  # <- serverless adapter
 
 app = Flask(__name__)
 
-# ✅ CORS configuration for your frontend
-CORS(
-    app,
-    resources={r"/api/*": {"origins": [
-        "https://zeroday.help",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5000",
-        "http://127.0.0.1:5000"
-    ]}},
-    supports_credentials=True
-)
+# CORS configuration
+CORS(app, resources={r"/api/*": {"origins": ["https://zeroday.help", "http://localhost:3000"]}}, supports_credentials=True)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -69,41 +60,23 @@ def get_number_info(number_str: str, region: str = None, language: str = "en") -
 
 @app.route("/")
 def index():
-    return jsonify({
-        "status": "ok",
-        "message": "Phone Parser API is running"
-    })
+    return jsonify({"status": "ok", "message": "Phone Parser API is running"})
 
 @app.route("/api/parse", methods=["POST"])
 def api_parse():
-    try:
-        data = request.get_json(silent=True) or {}
-        number = data.get("number")
-        if not number:
-            return jsonify({
-                "success": False,
-                "error": "missing_parameter",
-                "message": "`number` is required."
-            }), 400
+    data = request.get_json(silent=True) or {}
+    number = data.get("number")
+    if not number:
+        return jsonify({"success": False, "error": "missing_parameter", "message": "`number` is required."}), 400
 
-        region = data.get("region")
-        language = data.get("language", "en")
+    region = data.get("region")
+    language = data.get("language", "en")
 
-        logging.info(f"Parsing number={number} region={region}")
+    info = get_number_info(number, region, language)
+    if "error" in info:
+        return jsonify({"success": False, "error": info}), 400
 
-        info = get_number_info(number, region, language)
+    return jsonify({"success": True, "data": info}), 200
 
-        if "error" in info:
-            return jsonify({"success": False, "error": info}), 400
-
-        return jsonify({"success": True, "data": info}), 200
-
-    except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
-        return jsonify({"success": False, "error": "internal_error", "message": "Internal server error"}), 500
-
-# ✅ Vercel serverless handler
-def handler(event, context):
-    from mangum import Mangum
-    asgi_handler = Mangum(app)
-    return asgi_handler(event, context)
+# Wrap Flask app for serverless deployment
+handler = Mangum(app)

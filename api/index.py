@@ -4,21 +4,27 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import phonenumbers
 from phonenumbers import PhoneNumberType, PhoneNumberFormat
-from phonenumbers import carrier as carrier_mod, geocoder as geocoder_mod, timezone as timezone_mod
+from phonenumbers import carrier as carrier_mod
+from phonenumbers import geocoder as geocoder_mod
+from phonenumbers import timezone as timezone_mod
 import logging
 
 app = Flask(__name__)
 
-# ✅ Correct CORS for zeroday.help
+# ✅ CORS configuration
 CORS(
     app,
-    resources={r"/api/*": {
-        "origins": [
-            "https://zeroday.help",
-            "http://localhost:5000",
-            "http://127.0.0.1:5000"
-        ]
-    }},
+    resources={
+        r"/api/*": {
+            "origins": [
+                "https://zeroday.help",
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:5000",
+                "http://127.0.0.1:5000"
+            ]
+        }
+    },
     supports_credentials=True
 )
 
@@ -45,47 +51,75 @@ def get_number_info(number_str: str, region: str = None, language: str = "en") -
     except phonenumbers.NumberParseException as e:
         return {"error": "NumberParseException", "message": str(e)}
 
-    return {
-        "input": number_str,
-        "valid": phonenumbers.is_valid_number(parsed),
-        "possible": phonenumbers.is_possible_number(parsed),
-        "type": TYPE_MAP.get(phonenumbers.number_type(parsed), "Unknown"),
-        "region_code": phonenumbers.region_code_for_number(parsed),
-        "country_code": parsed.country_code,
-        "international_format": phonenumbers.format_number(parsed, PhoneNumberFormat.INTERNATIONAL),
-        "national_format": phonenumbers.format_number(parsed, PhoneNumberFormat.NATIONAL),
-        "e164": phonenumbers.format_number(parsed, PhoneNumberFormat.E164),
-        "rfc3966": phonenumbers.format_number(parsed, PhoneNumberFormat.RFC3966),
-        "carrier": carrier_mod.name_for_number(parsed, language) or "",
-        "geolocation": geocoder_mod.description_for_number(parsed, language) or "",
-        "time_zones": list(timezone_mod.time_zones_for_number(parsed)),
-    }
+    try:
+        number_type = phonenumbers.number_type(parsed)
+        return {
+            "input": number_str,
+            "valid": phonenumbers.is_valid_number(parsed),
+            "possible": phonenumbers.is_possible_number(parsed),
+            "type": TYPE_MAP.get(number_type, "Unknown"),
+            "type_code": int(number_type),
+            "region_code": phonenumbers.region_code_for_number(parsed),
+            "country_code": parsed.country_code,
+            "international_format": phonenumbers.format_number(parsed, PhoneNumberFormat.INTERNATIONAL),
+            "national_format": phonenumbers.format_number(parsed, PhoneNumberFormat.NATIONAL),
+            "e164": phonenumbers.format_number(parsed, PhoneNumberFormat.E164),
+            "rfc3966": phonenumbers.format_number(parsed, PhoneNumberFormat.RFC3966),
+            "carrier": carrier_mod.name_for_number(parsed, language) or "",
+            "geolocation": geocoder_mod.description_for_number(parsed, language) or "",
+            "time_zones": list(timezone_mod.time_zones_for_number(parsed)) or []
+        }
+    except Exception as e:
+        return {"error": "ProcessingError", "message": str(e)}
 
 
 @app.route("/")
 def index():
-    return "Phone Parser API is running."
+    return jsonify({
+        "status": "ok",
+        "message": "Phone Parser API is running"
+    })
 
 
 @app.route("/api/parse", methods=["POST"])
 def api_parse():
+    try:
+        data = request.get_json(silent=True) or {}
 
-    data = request.get_json(silent=True) or {}
+        number = data.get("number")
+        if not number:
+            return jsonify({
+                "success": False,
+                "error": "missing_parameter",
+                "message": "`number` is required."
+            }), 400
 
-    number = data.get("number")
-    if not number:
+        region = data.get("region")
+        language = data.get("language", "en")
+
+        logging.info(f"Parsing number={number} region={region}")
+
+        info = get_number_info(number, region, language)
+
+        if "error" in info:
+            return jsonify({
+                "success": False,
+                "error": info
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "data": info
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
         return jsonify({
             "success": False,
-            "error": "missing_parameter",
-            "message": "`number` is required."
-        }), 400
+            "error": "internal_error",
+            "message": "Internal server error"
+        }), 500
 
-    region = data.get("region")
-    language = data.get("language", "en")
 
-    info = get_number_info(number, region, language)
-
-    if "error" in info:
-        return jsonify({"success": False, "error": info}), 400
-
-    return jsonify({"success": True, "data": info})
+# Required for Vercel serverless
+app = app
